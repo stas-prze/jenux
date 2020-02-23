@@ -1,0 +1,220 @@
+#!/bin/zsh
+function createmenu
+{
+export menudesc=`stty -a|grep rows|cut -f 2-6 -d \;|cut -f 3,5,8 -d \ |tr \; \ |sed s/"  "/" "/|sed s/"  "/" "/`
+echo whiptail --menu `cat $1|head -n 1` `echo -n $menudesc` `cat $1|tail -n 1`>/tmp/menu
+cat $1|tail -n 1|sed s/\"\ /\\n/g>/tmp/itemlist
+chmod 755 /tmp/menu
+/tmp/menu 2>/tmp/choice
+export choice=`cat /tmp/choice|cut -f 2 -d \;`
+export linecounter=1
+export numitems=`cat /tmp/itemlist|wc -l`
+for line in `cat /tmp/itemlist`;do if echo $line|grep -q \;;then sleep .01;else echo $line>>/tmp/items;fi;export linecounter=$(($linecounter+1));if echo $linecounter|grep -qw $(($numitems+1));then break;else continue;fi;done
+export itemname=`cat /tmp/items|head -n $choice|tail -n 1|sed s/\?/\ /g`
+rm /tmp/choice /tmp/menu /tmp/itemlist /tmp/items
+clear
+}
+function createdynamicmenu
+{
+$@|sed s/\ /\?/g>/tmp/itemlist
+export title="\"`cat /tmp/itemlist|wc -l` items available\""
+export counter="1"
+export menudesc=`stty -a|grep rows|cut -f 2-6 -d \;|cut -f 3,5,8 -d \ |tr \; \ |sed s/"  "/" "/|sed s/"  "/" "/`
+echo $title > /tmp/dynmenu
+for item in `cat /tmp/itemlist`;do echo -n "\"`echo $item|cut -c 1`;`echo -n $counter`\"" "\"$item\" " >>/tmp/dynmenu;export counter=$(($counter+1));done
+createmenu /tmp/dynmenu
+rm /tmp/dynmenu
+}
+function getdev
+{
+echo powering on bluetooth radio
+bluetoothctl power on
+echo scanning for bluetooth devices
+bluetoothctl --timeout 2 scan on|grep Device|cut -f 2 -d \]|cut -f 3,4,5 -d \ >/tmp/devlist
+if wc -l /tmp/devlist|grep -qw 0;then
+echo no devices found. Either this device\'s bluetooth radio is not opperating propperly, or no devices could be detected. Please enter the mac address manually. Please enter the mac address and press enter. Alternatively, please enter r to rescan
+read macaddr
+if [ $macaddr = r ];then
+unset macaddr
+getdev
+fi
+else
+createdynamicmenu cat /tmp/devlist
+export macaddr=`echo $itemname|cut -f 1 -d \ |cut -f 1-6 -d :|cut -f 2 -d \"`
+fi
+}
+function setdev
+{
+sed -i s/aa:bb:cc:dd:ee:ff/$macaddr/g /mnt/usr/bin/btconnect
+}
+if [ -f /usr/lib/binfmt.d/qemu.conf ];then
+sleep .01
+else
+echo "installing binary translator..."
+pacman --noconfirm -Sy qemu-user-static
+fi
+if [ -f /usr/bin/bluetoothctl ];then
+sleep .01
+else
+echo installing bluetooth utilities for connectivity setup
+pacman --noconfirm -Sy bluez bluez-utils
+systemctl --no-block start bluetooth
+fi
+echo "on the next screen, you will be asked to select the memory card to flash this image to. Please note: AFTER YOU PICK THE DRIVE, ALL INFORMATION WILL BE DESTROYED, FOREVER! if you have any important information that you cannot afford to recreate or get again, please make sure you have backups! To be on the safe side, please feel free to use the clonezilla program on this dvd to back up the drive beforehand. If you are sure that you would like to flash the selected device, destroying all information in the process, press enter. Otherwise, press control c to exit the installer. "
+read confirm
+fdisk -l|grep Disk\ /dev|cut -f 2-4 -d \ |cut -f 1-2 -d :|cut -f 1 -d ,>/tmp/disks
+createdynamicmenu cat /tmp/disks
+export disk=`echo $itemname|cut -f 1 -d \:|cut -f 2 -d \"`
+unset choice
+clear
+rm /tmp/disks
+echo "\"Which architecture is this card intended for?\"">/tmp/pimenu
+echo -n "\"1\" \"Raspberry Pi 0/0w/1, any revision, armv6h boards\" \"2\" \"Raspberry Pi 2/3, 32-bit armv7h boards\" \"3\" \"Raspberry Pi 3, 64-bit only, armv8a boards\"">>/tmp/pimenu
+createmenu /tmp/pimenu
+case "$choice" in
+1)
+export arch=armv6h
+export model="rpi"
+export transtype=arm
+;;
+2)
+export arch=armv7h
+export model="rpi-2"
+export transtype=arm
+;;
+3)
+export arch=aarch64
+export model="rpi-3"
+export transtype=aarch64
+;;
+esac
+echo "\"Select a software preset to install.\"">/tmp/pimenu
+echo -n "\"a\" \"Alexa\" \"k\" \"Kodi Media Center\" \"l\" \"Arch Linux Arm, similar to Everything preset in Jenux\"">>/tmp/pimenu
+createmenu /tmp/pimenu
+case "$choice" in
+a)
+export presetname=alexa
+;;
+k)
+export presetname=kodi
+;;
+l)
+export presetname=jenux
+;;
+esac
+echo "partitioning your selected disk... "
+fdisk $disk <<EOF
+o
+n
+
+
+
++100M
+t
+C
+n
+
+
+
+
+w
+EOF
+partprobe
+echo "formatting and mounting device..."
+if [ -e $disk"2" ];then
+mkfs.ext4 $disk"2"
+mount $disk"2" /mnt
+mkfs.vfat $disk"1"
+mkdir /mnt/boot
+mount $disk"1" /mnt/boot
+else
+mkfs.ext4 $disk"p2"
+mount $disk"p2" /mnt
+mkfs.vfat $disk"p1"
+mkdir /mnt/boot
+mount $disk"p1" /mnt/boot
+fi
+cd /mnt
+if [ -e /dev/st0 ];then
+sleep .01
+else
+ln -s /dev/stdin /dev/st0
+fi
+export baseurl="http://os.archlinuxarm.org/os/ArchLinuxARM-$model-latest.tar.gz"
+echo downloading and extracting Arch Linux ARM base OS image
+while true;do
+if curl -LO $baseurl;then
+bsdtar -xf ArchLinuxARM-$model-latest.tar.gz 2>/dev/null
+rm ArchLinuxARM-$model-latest.tar.gz
+break
+else
+continue
+fi
+done
+while true;do
+if curl https://nashcentral.duckdns.org/autobuildres/pi/files.tar.gz|bsdtar -xz;then
+break
+else
+continue
+fi
+done
+cp /usr/bin/qemu-$transtype-static /mnt/usr/bin
+arch-chroot /mnt /usr/bin/qemu-$transtype-static /bin/sh /etc/postinstall.sh $arch $presetname
+echo "Copying network used in live environment to unit..."
+echo "\"Would you like to connect to a bluetooth device such as a keyboard on boot?\"">/tmp/bluemenu
+echo "\"y\" \"yes\" \"n\" \"no\"">>/tmp/bluemenu
+createmenu /tmp/bluemenu
+case "$choice" in
+y)
+getdev
+setdev
+;;
+n)
+arch-chroot /mnt systemctl disable btconnect
+rm /mnt/usr/bin/btconnect /mnt/usr/lib/systemd/system/btconnect.service
+;;
+esac
+cp /etc/NetworkManager/system-connections/* /mnt/etc/NetworkManager/system-connections/
+echo "Image installation and configuration has been completed. Press Enter to begin wireless network setup."
+read var
+echo "\"Add another network?\"">/tmp/addmenu
+echo -n "\"y\" \"yes\" \"n\" \"no\"">>/tmp/addmenu
+createmenu /tmp/addmenu
+while true;do
+if echo $choice|grep -w y;then
+curl -o /mnt/etc/NetworkManager/system-connections/pi https://nashcentral.duckdns.org:8100/autobuildres/pi/netconf
+nmcli -f ssid d wifi>/tmp/netlist
+echo other>>/tmp/netlist
+export numlines=`cat /tmp/netlist|wc -l`
+cat /tmp/netlist|tail -n $(($numlines-1))>/tmp/networks
+createdynamicmenu cat /tmp/networks
+rm /tmp/networks /tmp/netlist
+export netname=$itemname
+export itemname=`for word in \`echo $netname\`;do echo $word\ ;done|head -c -2`
+if echo $itemname|grep -q -w other;then
+echo "enter network name"
+read netname
+echo Enter network key for $netname
+read key
+clear
+else
+export oldname=`echo -n $netname`
+export netname=`echo $oldname|sed s/'        '//g`
+echo Enter Network Key for $netname
+read key
+clear
+fi
+sed -i s/id=pi/id=$netname/g /mnt/etc/NetworkManager/system-connections/pi
+sed -i s/ssid=netname/ssid=$netname/g /mnt/etc/NetworkManager/system-connections/pi
+sed -i s/psk=netkey/psk=$key/g /mnt/etc/NetworkManager/system-connections/pi
+mv /mnt/etc/NetworkManager/system-connections/pi /mnt/etc/NetworkManager/system-connections/$netname
+chown root:root /mnt/etc/NetworkManager/system-connections/*
+chmod 600 /mnt/etc/NetworkManager/system-connections/*
+createmenu /tmp/addmenu
+else
+exit 0
+fi
+done
+cd
+sync
+umount /mnt/boot /mnt

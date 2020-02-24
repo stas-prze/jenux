@@ -8,7 +8,6 @@ From an arch based system, navigate to /linux, and extract iso-build.tar.gz. Aft
 * Fix jenux anything software preset installation script
 * Fix RPI flashing scripts
 ### optional
-* add android10 support
 * Add more linux distributions, EG fedora, suse, debian ETC
 * Add more desktop enviromment's, EG xfce, kde plazma, ETC
 * Add retro arch support for raspberry pi

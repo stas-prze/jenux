@@ -1,0 +1,398 @@
+#!/bin/zsh
+#Jenux Installer
+#Copyright (C) 2015-2019  Daniel Nash
+                                                                                                                                                                          
+    #This program is free software; you can redistribute it and/or modify
+    #it under the terms of the GNU General Public License as published by
+    #the Free Software Foundation; either version 2 of the License, or
+    #(at your option) any later version.
+                                                                                                                                                                          
+    #This program is distributed in the hope that it will be useful,
+    #but WITHOUT ANY WARRANTY; without even the implied warranty of
+    #MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    #GNU General Public License for more details.
+                                                                                                                                                                          
+    #You should have received a copy of the GNU General Public License along
+    #with this program; if not, write to the Free Software Foundation, Inc.,
+  #  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+function createmenu
+{
+export menudesc=`stty -a|grep rows|cut -f 2-6 -d \;|cut -f 3,5,8 -d \ |tr \; \ |sed s/"  "/" "/|sed s/"  "/" "/`
+echo whiptail --menu `cat $1|head -n 1` `echo -n $menudesc` `cat $1|tail -n 1`>/tmp/menu
+cat $1|tail -n 1|sed s/\"\ /\\n/g>/tmp/itemlist
+chmod 755 /tmp/menu
+/tmp/menu 2>/tmp/choice
+export choice=`cat /tmp/choice|cut -f 2 -d \;`
+export linecounter=1
+export numitems=`cat /tmp/itemlist|wc -l`
+for line in `cat /tmp/itemlist`;do if echo $line|grep -q \;;then sleep .01;else echo $line>>/tmp/items;fi;export linecounter=$(($linecounter+1));if echo $linecounter|grep -qw $(($numitems+1));then break;else continue;fi;done
+export itemname=`cat /tmp/items|head -n $choice|tail -n 1|sed s/\?/\ /g`
+rm /tmp/choice /tmp/menu /tmp/itemlist /tmp/items
+clear
+}
+function createdynamicmenu
+{
+$@|sed s/\ /\?/g>/tmp/itemlist
+export title="\"`cat /tmp/itemlist|wc -l` items available\""
+export counter="1"
+export menudesc=`stty -a|grep rows|cut -f 2-6 -d \;|cut -f 3,5,8 -d \ |tr \; \ |sed s/"  "/" "/|sed s/"  "/" "/`
+echo $title > /tmp/dynmenu
+for item in `cat /tmp/itemlist`;do echo -n "\"`echo $item|cut -c 1`;`echo -n $counter`\"" "\"$item\" " >>/tmp/dynmenu;export counter=$(($counter+1));done
+createmenu /tmp/dynmenu
+rm /tmp/dynmenu
+}
+modprobe ecryptfs
+modprobe efivarfs
+echo "Warning! Improper use of this installer can lead to loss of data. To continue, press enter. Otherwise, press control c to abort."
+read dumbyvar
+echo "Welcome to the Jenux installer! "
+curl -s -o /etc/pacman.conf "https://nashcentral.duckdns.org:8100/autobuildres/linux/pacman.conf"
+echo "Initializing Package Manager, please wait..."
+systemctl stop pacman-init
+umount /etc/pacman.d/gnupg
+killall -9 gpg-agent
+pacman-key --init
+pacman-key --populate archlinux blackarch
+cd
+curl -O https://blackarch.org/strap.sh
+chmod 755 strap.sh
+./strap.sh
+rm strap.sh
+pacman --needed --noconfirm -Sy archlinux-keyring beep pacman-mirrorlist blackarch-mirrorlist dmidecode
+pacman-key --refresh
+cd $OLDPWD
+clear
+beep -f 750 -l 500
+echo "on the next screen, you will be asked to select a hard disk to install to. Please note: If you have other opperating systems on your computer that you would like to multi boot with, please resize their partitions manually and create enough free space for linux. As a minimum, a command line installation will require at least 2 GB, a graphical desktop at least 8, and an installation of everything will require at least 60 GB excluding data. WARNING!!!!! IMPROPER PARTITIONING WILL LEAD TO LOSS OF DATA!!!!! Whenever making changes to partition tables, please make sure you back up all data on the disk in case of issues. In the Jenux ISO Main Menu, an option to run the Clonezilla backup program is provided for automated backup and restores of hard disks."
+read confirm
+while true;do
+if [ -z $disk ];then
+sh -c 'echo -n "print devices"|parted|grep /dev|grep \(>/tmp/disk;cat /tmp/disk|tr \  \:>/tmp/disks;rm /tmp/disk'
+createdynamicmenu cat /tmp/disks
+export disk=`echo $itemname|cut -f 1 -d \:|cut -f 2 -d \"`
+unset choice
+clear
+echo "\"How would you like to partition your disk?\"">/tmp/partmenu
+echo -n "\"e\" \"erase disk and install jenux, will use all space on disk\" \"m\" \"manually, prints instructions and drops to gdisk partitioning console\"" >> /tmp/partmenu
+createmenu /tmp/partmenu
+case "$choice" in
+e)
+parted $disk --script mklabel gpt
+sgdisk -o -n 1:0:4096:ef00 -n 2:4097:500M:ef00 -n 3:1024001:-1s -c 2:EFI -c 3:linux $disk
+sgdisk -t 1:ef02 $disk
+;;
+m)
+echo "partitioning instructions:"
+echo "To create new partitions, type n at the command prompt. To change a partition's name after creation, type c."
+echo "create at least 3 partitions. The following layout is suggested:"
+echo "partition 1: from sector 0 to 2M, type code ef02, for BIOS Boot, name none"
+echo "partition 2, from 2M to 502M, for uefi boot and linux kernel, type code ef00, name EFI"
+echo "partition 3, from 502M to however large you want your linux installation to be, default type code 8300, name linux."
+echo "feel free to make changes to this suggested layout, but the type codes and partition names must be as stated in the instructions for a successful installation."
+echo "if you made a mestake and want to start from scratch, type o, y, enter to destroy the in memory copy of the partition table. Don't forget to type w enter y enter to write your new partition table to the disk."
+gdisk $disk 
+;;
+esac
+if dmidecode|grep Manufacturer|head -n 1|cut -f 2 -d \:|grep -i hp;then
+if [ -d /sys/firmware/efi/efivars ];then
+sleep .01
+else
+parted $disk --script disk_set pmbr_boot on > /dev/null
+fi
+fi
+partprobe
+sleep 1.5
+if [ -e /dev/disk/by-partlabel/EFI ];then
+export boot="/dev/disk/by-partlabel/EFI"
+else
+clear
+echo "Your EFI System Partition which will hold the kernel and bootloader cannot automatically be detected. Please select it from the following list."
+read var
+export entries=`lsblk -nro name,size $disk|wc -l`
+lsblk -nro name,size $disk|head -n $entries|tail -n $(($entries-1)) > /tmp/vols
+createdynamicmenu cat /tmp/vols
+export bootdev=`echo $itemname|cut -f 2 -d \"|cut -f 1 -d \  `
+export boot=/dev/$bootdev
+sgdisk $disk -c=$choice:EFI
+fi
+if [ -e /dev/disk/by-partlabel/linux ];then
+export root="/dev/disk/by-partlabel/linux"
+else
+clear
+echo "Your root device cannot automatically be detected. Please select it from the following list."
+read var
+export entries=`lsblk -nro name,size $disk|wc -l`
+lsblk -nro name,size $disk|head -n $entries|tail -n $(($entries-1)) > /tmp/vols
+createdynamicmenu cat /tmp/vols
+export rootdev=`echo $itemname|cut -f 2 -d \"|cut -f 1 -d \  `
+export root=/dev/$rootdev
+sgdisk $disk -c=$choice:linux
+fi
+else
+break
+fi
+done
+clear
+if blkid $boot|grep -q vfat;then
+echo backing up ESP
+mount $boot /boot
+cd /boot
+tar --exclude vmlinuz-linux --exclude initramfs-linux.img --exclude initramfs-linux-fallback.img -czf ~/esp.tar.gz .
+cd $OLDPWD
+rm -rf /boot/*
+umount /boot
+else
+echo boot partition $boot is not an ESP, formatting it for jenux use
+mkfs.vfat -n EFI $boot
+fi
+while true;do
+if [ -z $encrypt ];then
+if mountpoint -q /mnt;then
+umount /mnt
+fi
+echo "Would you like to encrypt your system with LUKS? This will protect your data, even in cases where your device is stolen, as well as providing assurence that your system cannot easily be compromised by a third party. For encryption, enter y, otherwise, enter n."
+read encrypt
+if echo $encrypt|grep -q y;then
+while true;do
+if cryptsetup -q luksFormat $root;then
+break
+else
+echo error formatting volume, please re-enter your passphrase. If the problem persists, reboot and run the installer again.
+continue
+fi
+done
+echo "opening encrypted volume, enter your key here. "
+while true;do
+if cryptsetup luksOpen $root root;then
+break
+else
+echo error opening volume, please re-enter your passphrase. If the problem persists, reboot and run the installer again.
+continue
+fi
+done
+mkfs.ext4 -q -L root /dev/mapper/root
+mount /dev/mapper/root /mnt
+echo "preparing for encrypted swap. This process uses random data to protect the content of ram that might be written to disks. Please note: Since random data is used, no passphrase or other user known method can be used to recover swap data, unless the swap configuration is changed in the main system."
+mkfs.ext4 /mnt/swapfile 8G > /dev/null 2> /dev/null
+chmod 600 /mnt/swapfile
+mkdir -p /mnt/etc
+dd status=none if=/dev/urandom of=/mnt/etc/swapkey count=16383
+chmod 600 /mnt/etc/swapkey
+cryptsetup -q -d /mnt/etc/swapkey luksFormat /mnt/swapfile
+cryptsetup -d /mnt/etc/swapkey luksOpen /mnt/swapfile swap
+mkswap /dev/mapper/swap > /dev/null 2> /dev/null
+swapon /dev/mapper/swap
+else
+mkfs.ext4 -q -L root $root
+mount $root /mnt
+fi
+else
+break
+fi
+done
+mkdir -p /mnt/boot/EFI
+mount $boot /mnt/boot
+if [ -f ~/esp.tar.gz ];then
+mv ~/esp.tar.gz /mnt/boot.old.tar.gz
+echo restoring old ESP contents to /boot.old
+mkdir -p /mnt/boot.old
+cd /mnt/boot.old
+tar -xf /mnt/boot.old.tar.gz
+cd $OLDPWD
+fi
+if [ -e /dev/mapper/swap ];then
+swapoff /dev/mapper/swap
+cryptsetup remove swap
+fi
+echo "generating file system table"
+genfstab -p -U /mnt > /tmp/fstab
+if [ -e /dev/mapper/swap ];then
+swapoff /dev/mapper/swap
+cryptsetup remove swap
+fi
+while true;do
+if [ -z $host ];then
+echo "enter the name for your system. If you are building a system for personal use, you can enter anything, otherwise, ask your system administrator about naming convensions in your network."
+read -t 2147483647 host
+echo $host > /tmp/hostname
+else
+break
+fi
+done
+clear
+while true;do
+if [ -z $presetname ];then
+echo "\"Select a software preset. Available presets are: \"" > /tmp/installmenu
+echo -n "\"b\" \"Basic command line: creates an environment similar to what is provided on this install DVD, useful for servers or if you would like to build your system from a minimal base. \" " >> /tmp/installmenu
+echo -n "\"g\" \"Gnome desktop: Installs a full gnome desktop environment with the firefox web browser, thunderbird mail client, and libreoffice productivity suite. Useful for newer computers. \" " >> /tmp/installmenu
+echo -n "\"m\" \"Mate Desktop: Installs a similar environment to the above gnome desktop preset, using the mate desktop, which might work better on older or lower powered hardware. \" " >> /tmp/installmenu
+echo -n "\"k\" \"Kodi Media Center: Installs a standalone media center using the kodi software with addons for many connections to online music and TV services. \" " >> /tmp/installmenu
+echo -n "\"r\" \"Retroarch: Installs the retroarch multi-emulator system, allowing you to create a dedicated system used to emulated classic video games and consume media content.\" " >> /tmp/installmenu
+echo -n "\"e\" \"Everything: installs all desktop environments, office suites, security and accessibility tools, web browsers, mail clients, games, virtualization applications and so on. If unsure, and if disk space is not an issue, select this option for a complete system. \" " >> /tmp/installmenu
+createmenu /tmp/installmenu
+case "$choice" in
+b)
+export presetname="base"
+;;
+g)
+export presetname="gnome"
+;;
+m)
+export presetname="mate"
+;;
+k)
+export presetname="kodi"
+;;
+r)
+export presetname="retroarch"
+;;
+e)
+export presetname="all"
+;;
+esac
+unset choice
+rm /tmp/installmenu
+else
+break
+fi
+done
+export pkgurl="https://nashcentral.duckdns.org:8100/autobuildres/linux/pkg.$presetname"
+export filesurl="https://nashcentral.duckdns.org:8100/autobuildres/linux/files.tar.gz"
+cp -rf /etc/pacman* /mnt/etc
+while true;do
+if [ -z $kerntype ];then
+echo "\"select kernel type\"">/tmp/kernmenu
+echo -n "\"l\" \"lts kernel, less freequent reboots after updates\" \"s\" \"standard arch kernel, better hardware compatibility and security, but more freequent reboots after updates\"">>/tmp/kernmenu
+createmenu /tmp/kernmenu
+case "$choice" in
+l)
+export kerntype="linux-lts"
+;;
+s)
+export kerntype="linux"
+;;
+esac
+break
+fi
+done
+while true;do
+echo downloading package installation script from $pkgurl
+if curl -o pkg $pkgurl;then
+break
+else
+echo "An error has occured. Retrying."
+continue
+fi
+done
+while true;do
+echo ensuring that the $kerntype kernel is installed
+if echo -n $kerntype $kerntype-headers >> pkg;then
+break
+else
+continue
+fi
+done
+while true;do
+echo making package installer executable
+if chmod 755 pkg;then
+break
+else
+echo "An error has occured. Retrying."
+continue
+fi
+done
+while true;do
+echo "installing your selected software"
+echo searching for missing packages
+cp pkg install
+cat pkg |tr \  \\n|pacman --print-format %n -Sp - 2>/dev/stdout|grep -i 'target not found'|cut -f 3 -d : > missing
+if wc -c missing |cut -f 1 -d \  |grep -w 0;then
+sleep .01
+else
+for f in `cat missing`;do
+case "$f" in
+pacstrap)
+continue
+;;
+/mnt)
+continue
+;;
+--force)
+continue
+;;
+--ignore)
+continue
+;;
+cuda)
+continue
+;;
+linux)
+continue
+;;
+linux-headers)
+continue
+;;
+truecrack)
+continue
+;;
+'--overwrite')
+continue
+;;
+\\*)
+continue
+;;
+esac
+echo removing $f package
+sed -i s\|\ $f\ \|\ \|g install
+done
+fi
+cat install|tr \\n \  >pkg
+chmod 755 pkg
+rm missing
+if ./pkg;then
+echo "main OS installation complete!"
+break
+else
+continue
+fi
+done
+if echo $kerntype|grep -qw linux-lts;then
+arch-chroot /mnt /bin/sh -c "pacman -R --noconfirm linux"
+fi
+alsactl -f /mnt/var/lib/alsa/asound.state store
+if [ -f /etc/asound.conf ];then
+cp /etc/asound.conf /mnt/etc
+fi
+mv /tmp/fstab /mnt/etc
+mv /tmp/hostname /mnt/etc
+cp /etc/NetworkManager/system-connections/* /mnt/etc/NetworkManager/system-connections
+chown -R root:root /mnt/etc/NetworkManager/system-connections/*
+chmod -R 600 /mnt/etc/NetworkManager/system-connections/*
+cp /etc/pacman.conf /mnt/etc
+chown root:root /mnt/etc/pacman.conf
+chmod 644 /mnt/etc/pacman.conf
+cd /mnt
+echo "Downloading additional files... "
+while true;do
+if curl $filesurl|tar -xz;then
+echo "Additional files were installed successfully! "
+break
+else
+continue
+fi
+done
+chmod 755 /mnt/etc/postinstall.sh
+while true;do
+beep -f 1000 -l 500
+clear
+chroot /mnt /etc/postinstall.sh $disk $presetname $encrypt
+if [ -f /mnt/etc/postinstall.sh ];then
+continue
+else
+break
+fi
+done
+echo "Installation complete! If bootloader installed correctly, press enter to boot into your new system. If bootloader install failed, press control c to drop to shell. "
+read var
+sync
+reboot -f

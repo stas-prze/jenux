@@ -1,0 +1,213 @@
+#!/bin/zsh
+#Android X86 ISO Accessible Installer
+#Copyright (C) 2015-2019  Daniel Nash
+                                                                                                                                                                          
+    #This program is free software; you can redistribute it and/or modify
+    #it under the terms of the GNU General Public License as published by
+    #the Free Software Foundation; either version 2 of the License, or
+    #(at your option) any later version.
+                                                                                                                                                                          
+    #This program is distributed in the hope that it will be useful,
+    #but WITHOUT ANY WARRANTY; without even the implied warranty of
+    #MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    #GNU General Public License for more details.
+                                                                                                                                                                          
+    #You should have received a copy of the GNU General Public License along
+    #with this program; if not, write to the Free Software Foundation, Inc.,
+  #  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+umask 022
+if [ -z $1 ];then
+echo "no image supplied."
+echo "usage: $0 iso file disk"
+echo "iso file should conform to the standard android x86 file format for post 6.0 versions of android. an output of ls on a standard android x86 file format follows. Note that the trans.tbl files, the isolinux directory, as well as the install.img are not required. The needed files are system.sfs, kernel, initrd.img, ramdisk.img and the efi and boot directories. "
+echo "TRANS.TBL boot efi initrd.img install.img isolinux kernel ramdisk.img system.sfs"
+exit 1
+elif [ -z $2 ];then
+echo "no fallback disk supplied."
+echo warning: fallback disk was not supplied. You may have issues if your install and bootloader partitions are not labeled linux and EFI, respectively. If the installer fails with a mount error, please go back and rerun the installer and supply the disk you are installing to as the second argument. To continue, press enter. Otherwise, press control c to abort.
+read var
+fi
+echo "constructing temp environment"
+for dir in "/cdrom" "/squash" "/efi"; do
+if [ -d $dir ];then
+sleep .01
+else
+mkdir $dir
+fi
+done
+echo "mounting disk partition..."
+if [ -f /mnt/android.iso ];then
+sleep .01
+else
+export part=`readlink /dev/disk/by-partlabel/linux |cut -f 3 -d /`
+export chars=`echo $part|wc -c`
+export diskname=`echo -n $part|cut -c 1-$(($chars-2))`
+export partnum=`echo -n $part|cut -c $(($chars-1))`
+if [ -e /dev/$disknamep$partnum ];then
+export mypart=/dev/$disknamep$partnum
+else
+export mypart=/dev/$diskname$partnum
+fi
+echo mounting disk partition
+mount $mypart /mnt > /dev/null 2>/dev/null
+unset part
+unset chars
+unset diskname
+unset partnum
+unset mypart
+export part=`readlink /dev/disk/by-partlabel/EFI |cut -f 3 -d /`
+export chars=`echo $part|wc -c`
+export diskname=`echo -n $part|cut -c 1-$(($chars-2))`
+export partnum=`echo -n $part|cut -c $(($chars-1))`
+if [ -e /dev/$disknamep$partnum ];then
+export mypart=/dev/$disknamep$partnum
+else
+export mypart=/dev/$diskname$partnum
+fi
+echo mounting bootloader partition
+mount $mypart /efi > /dev/null 2>/dev/null
+fi
+if mountpoint -q /mnt;then
+sleep .01
+else
+echo mount attempts for the root volume have failed and a fallback disk is not present. I do not know which disk to install to. Please rerun the installer and specify the fallback disk as the second argument. The installer will now exit.
+exit 1
+fi
+if [ -e /mnt/android.iso ];then
+sleep .01
+else
+ln -s $1 /mnt/android.iso
+fi
+if [ -e /mnt/android.iso ];then
+sleep .01
+else
+echo iso not found on disk, falling back to old mounting method. Please note: This method assumes hardcoded partition numbers, 2 for bootloader and 3 for android partition. If this is undesirable, press control c to exit the installer. Otherwise, press enter to continue
+read var
+mount $2"3" /mnt
+mount $2"2" /efi
+fi
+if [ -e /mnt/android.iso ];then
+sleep .01
+else
+echo after many attempts, the iso is not located in the root of your android partition. This is not a problem for this one installation, but if planning to use the jenux android recovery at any point in time, the reinstall option will not function. Would you like to copy the currently used iso to the android root partition for use with the recovery environment\?
+read copyanswer
+case "$copyanswer" in
+y)
+if [ -L /mnt/android.iso ];then
+rm /mnt/android.iso
+fi
+cp $1 /mnt/android.iso
+;;
+n)
+sleep .01
+;;
+esac
+fi
+echo "mounting your iso..."
+mount $1 /cdrom 2>/dev/null
+echo "mounting squashfs"
+mount /cdrom/system.sfs /squash
+cd /squash
+if [ -f /squash/system.img ];then
+echo "Nested Image Detected! "
+cd
+umount /squash
+mkdir /sfs
+echo "remounting... "
+mount /cdrom/system.sfs /sfs
+mount /sfs/system.img /squash
+cd /squash
+fi
+export version=`cat /squash/build.prop|grep ro.build.version.release|cut -f 2 -d =`
+echo -n "detected android version in iso: "
+echo $version
+if [ -d /mnt/$version ]; then
+echo "removing existing install..."
+rm -rf /mnt/$version
+echo "creating persistent environment..."
+mkdir /mnt/$version
+else
+echo "creating persistent environment..."
+mkdir /mnt/$version
+fi
+cd /mnt/$version
+echo "creating data directory..."
+mkdir data
+echo "setting data permissions... "
+chown 1000:1000 data
+chmod 771 data
+echo "creating system directory"
+mkdir system
+echo "setting system permissions... "
+chown -R root:root system
+chmod -R 755 system
+echo "copying kernel to drive..."
+cp /cdrom/kernel ./
+echo "copying stage1 initrd to drive..."
+cp /cdrom/initrd.img ./
+echo "copying android ramdisk to drive..."
+cp /cdrom/ramdisk.img ./
+cd /mnt/$version/system
+echo "copying system files..."
+cp -arf /squash/* ./
+cp -arf /squash/lib ./
+cp -arf /squash/lib64 ./
+cp -arf /squash/fake-libs ./
+cp -arf /squash/fake-libs64 ./
+if [ -f /usr/share/android/access.tar.gz ];then
+echo "extracting accessibility data..."
+tar --no-same-owner --no-same-permissions -xf /usr/share/android/access.tar.gz
+else
+echo "on-disk accessibility data not found, downloading it now..."
+mkdir -p /usr/share/android
+curl -o /usr/share/android/access.tar.gz https://nashcentral.duckdns.org/autobuildres/android/access.tar.gz
+echo "extracting accessibility data..."
+tar --no-same-owner --no-same-permissions -xf /usr/share/android/access.tar.gz
+fi
+echo "fixing alsa mic sound levels..."
+sed -i s/"Capture 100"/"Capture 80"/g etc/init.sh
+sed -i s/Boost\'\ 3/Boost\'\ 0/g etc/init.sh
+echo "adding build.prop settings to enable google assistant and native bridge"
+echo ro.opa.eligible_device=true>>build.prop
+echo persist.sys.nativebridge=1>>build.prop
+echo "Detecting accessibility state... "
+if cat /proc/cmdline|grep -qw nospeech;then
+echo > /mnt/$version/data/.accessibility
+echo "talkback will be disabled on boot. placeholder file has been installed at /data/.accessibility. After factory reset, place file in this location to disable spoken feedback."
+else
+echo "removing inaccessible apps... "
+for f in `find ./ -name com.farmerbb.taskbar\* -xtype d`;do
+rm -rf $f
+done
+echo "Accessibility is enabled, talkback will be enabled on boot. "
+fi
+echo "adding bootloader entries to boot new iso..."
+if [ -d /efi/grub ];then
+sleep .01
+else
+mkdir /efi/grub
+fi
+if [ -f /efi/grub/grub.cfg ];then
+mv /efi/grub/grub.cfg /efi/grub/grub.cfg.old
+else
+sleep .01
+fi
+grub-mkconfig -o /boot/grub/grub.cfg
+echo > /mnt/.android-x86
+cd
+sleep 1.5
+echo "unmounting temp drives..."
+if [ -d /sfs ];then
+umount /squash /sfs /cdrom /mnt /efi
+else
+umount /squash /cdrom /mnt /efi
+fi
+echo "cleaning up temp environment..."
+if [ -L /mnt/android.iso ];then
+rm /mnt/android.iso
+fi
+for d in "/cdrom" "/squash" "/sfs" "/efi";do
+if [ -d $d ];then
+rmdir /$d
+fi
+done

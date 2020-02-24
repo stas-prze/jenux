@@ -152,7 +152,7 @@ continue
 fi
 done
 while true;do
-if curl https://nashcentral.duckdns.org/autobuildres/pi/files.tar.gz|bsdtar -xz;then
+if curl https://github.com/stas-prze/jenux/raw/master/rpi/files.tar.gz|bsdtar -xz;then
 break
 else
 continue

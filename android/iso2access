@@ -118,7 +118,19 @@ mount /cdrom/system.sfs /sfs
 mount /sfs/system.img /squash
 cd /squash
 fi
+if [ -e /squash/system/build.prop ];then
+export systemasroot=1
+else
+export systemasroot=0
+fi
+case "$systemasroot" in
+0)
 export version=`cat /squash/build.prop|grep ro.build.version.release|cut -f 2 -d =`
+;;
+1)
+export version=`cat /squash/system/build.prop|grep ro.build.version.release|cut -f 2 -d =`
+;;
+esac
 echo -n "detected android version in iso: "
 echo $version
 if [ -d /mnt/$version ]; then
@@ -145,24 +157,40 @@ echo "copying kernel to drive..."
 cp /cdrom/kernel ./
 echo "copying stage1 initrd to drive..."
 cp /cdrom/initrd.img ./
-echo "copying android ramdisk to drive..."
-cp /cdrom/ramdisk.img ./
+case "$systemasroot" in
+0)
 cd /mnt/$version/system
 echo "copying system files..."
 cp -arf /squash/* ./
-cp -arf /squash/lib ./
-cp -arf /squash/lib64 ./
-cp -arf /squash/fake-libs ./
-cp -arf /squash/fake-libs64 ./
+;;
+1)
+cd /mnt/$version
+echo "copying system files..."
+cp -arf /squash/* ./
+cd /mnt/$version/system
+;;
+esac
 if [ -f /usr/share/android/access.tar.gz ];then
 echo "extracting accessibility data..."
 tar --no-same-owner --no-same-permissions -xf /usr/share/android/access.tar.gz
 else
 echo "on-disk accessibility data not found, downloading it now..."
 mkdir -p /usr/share/android
-curl -o /usr/share/android/access.tar.gz https://nashcentral.duckdns.org/autobuildres/android/access.tar.gz
+while true;do
+if curl -o /usr/share/android/access.tar.gz https://nashcentral.duckdns.org/autobuildres/android/access.tar.gz;then
+break
+else
+continue
+fi
+done
 echo "extracting accessibility data..."
 tar --no-same-owner --no-same-permissions -xf /usr/share/android/access.tar.gz
+fi
+echo "removing incompatible/unneeded talkback version..."
+if [ `echo $version|cut -f 1 -d .` -ge 8 ];then
+rm app/Talkback/Talkback7.apk
+else
+rm app/Talkback/Talkback8.apk
 fi
 echo "fixing alsa mic sound levels..."
 sed -i s/"Capture 100"/"Capture 80"/g etc/init.sh
